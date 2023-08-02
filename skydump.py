@@ -162,7 +162,7 @@ def download_page(url, destination_path):
     return destination_path, content_type
 
 
-def remap_page(origin_local_url, original_url, local_url):
+def remap_html_page(origin_local_url, original_url, local_url):
     logging.info(f"Remapping file {origin_local_url} by replacing {original_url} with {local_url}")
 
     local_file_content = None
@@ -172,6 +172,18 @@ def remap_page(origin_local_url, original_url, local_url):
     with open(origin_local_url, "wb") as fp:
         fp.write(local_file_content.replace(f'"{original_url}"', local_url).encode("utf-8"))
 
+
+post_process_link_resource_by_extension = {
+    "css": [
+
+    ]
+}
+
+post_process_page_by_extension = {
+    "html": [
+        lambda p, l: remap_html_page(p.local_url, l.remote_url, l.local_url)
+    ],
+}
 
 def execute(url,
             allow_crawl_conditions: List[re.Pattern] = list(),
