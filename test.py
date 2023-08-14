@@ -3,7 +3,7 @@ import logging
 
 from dataclasses import asdict
 
-from skydump import parse_page
+from skydump import parse_page, find_mimetype
 
 
 BLACKLIST_SUBDOMAINS = [
@@ -37,11 +37,25 @@ for l in page.links:
     print()
 
 
-from skydump2 import parse_url, execute
-t = parse_url("https://www.skyrock.com/blog/cybercop.php?id=41887727&url=https://lbb.skyrock.com/")
+from skydump import parse_url, execute
 t = parse_url("/2.html")
-print(t)
+t = parse_url("https://www.skyrock.com")
+t = parse_url("https://www.skyrock.com/")
+t = parse_url("https://www.skyrock.com/inxed.tmlh")
+t = parse_url("https://www.skyrock.com/blog")
+t = parse_url("https://www.skyrock.com/blog/")
+t = parse_url("https://www.skyrock.com/blog/test")
+t = parse_url("https://www.skyrock.com/blog/testent/")
+t = parse_url("https://www.skyrock.com/blog/E.re")
+t = parse_url("https://www.skyrock.com/blog/cybercop.php")
+t = parse_url("https://www.skyrock.com/blog/cybercop.php?id=41887727&url=https://lbb.skyrock.com/")
+t = parse_url("https://www.skyrock.com/blog/?id=41887727&url=https://lbb.skyrock.com/")
+t = parse_url("https://www.skyrock.com/?id=41887727&url=https://lbb.skyrock.com/")
 
 logging.getLogger().setLevel(logging.INFO)
 
-execute(START_URL, ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
+#execute(START_URL, ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
+
+print(find_mimetype("application/vnd.openxmlformats-officedocument.presentationml.presentation"))
+print(find_mimetype("text/html; charset=UTF-8"))
+print(find_mimetype("yeeeeauotajzo\"3^é''éù ; text/html; charset=UTF-8"))

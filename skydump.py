@@ -19,8 +19,8 @@ REG_BLOG = re.compile(r"([a-zA-Z0-9\-]+)\.skyrock\.com", re.I)
 REG_PAGE = re.compile(r"/(\d+)\.html", re.I)
 REG_RESOURCE_OLD = re.compile(r'"((?:[a-zA-Z]*://)?[^ "]+)"', re.I)
 REG_RESOURCE = re.compile(r'((?:[a-zA-Z]*:\/)?\/.+)', re.I)
-REG_URL_NO_PROTOCOL = re.compile(r"^(?:[a-zA-Z]*://)?(.+)", re.I)
-
+REG_URL_NO_PROTOCOL = re.compile(r"^([a-zA-Z]+://)?([^\/]*)(\/[^?]*)?(\?.*)?", re.I)
+#(.+)
 
 def parse_page(url,
                allow_crawl_conditions: List[re.Pattern] = list(),
@@ -36,7 +36,7 @@ def parse_page(url,
     
     domain_reg = REG_DOMAIN.search(url)
     if not domain_reg:
-        raise Exception("Can't parse domain in url {url}")
+        raise Exception(f"Can't parse domain in url: {url}")
 
     curr_page = Page(remote_url=url, domain=domain_reg.group(1))
 
@@ -97,7 +97,7 @@ def parse_page(url,
     return None
 
 
-def parse_url(url):
+def parse_url(url, force_extension=None):
     """
     Parse any url and return a list with the base path to the resource (without protocol)
     then the name of the resource.
@@ -106,35 +106,65 @@ def parse_url(url):
     => (['i.skyrock.net', '778', '417', 'pics'], 'photo_417_small.jpg')
 
     url: url to parse
+    add_html_extension: always add a .html to the name if the resource is not already a .htm/.html
     """
+
+    print(f"{url=}")
 
     res = REG_URL_NO_PROTOCOL.search(url)
     if not res:
         logging.warning(f"Can't download page {url}: non conform URL ")
         return None
 
-    no_protocol_url = res.group(1)
+    print(f"{res.groups()=}")
 
-    while no_protocol_url.endswith("/"):
-        no_protocol_url = no_protocol_url[:-1]
+    parameters = res.group(4)
 
-    splitted_path = no_protocol_url.split("/")
-
-    print(f"{splitted_path=}")
-
-    if len(splitted_path) == 1:
+    if res.group(3) is None:
         page_name = "index.html"
-        page_path = splitted_path
+        page_path = []
     else:
-        page_name = re.subn(r"[\\/:*?\"<>|]", "__", splitted_path[-1])
-        page_name = page_name[0]
+        is_folder = res.group(3).endswith("/")
 
-        #if os.path.splitext(page_name)[1].lower() not in [".htm", ".html"]:
-        #    page_name += ".html"
+        no_protocol_url = res.group(3).lstrip("/")
+        splitted_path = res.group(3).strip("/").split("/")
 
-        page_path = splitted_path[:-1]
+        #print(f"{no_protocol_url=}")
+        #print(f"{splitted_path=}")
+
+        if "/" not in no_protocol_url:
+            page_name = no_protocol_url if no_protocol_url != "" else "index.html"
+            page_path = []
+        else:
+            if is_folder:
+                page_name = "index.html"
+                page_path = splitted_path
+            else:
+                page_name = splitted_path[-1]
+                page_path = splitted_path[:-1]
+
+        if parameters:
+            escaped_parameters = re.subn(r"[\\/:*?\"<>|]", "_", parameters)
+            page_name = page_name + escaped_parameters[0]
+
+        # TODO: somehow vérifier le ContentType avant de faire ça
+        if force_extension is not None:
+            page_name += force_extension
+
+    print(f"{page_path=}, {page_name=}")
+    print(f"{res.group(2)}/{'/'.join(page_path)}/{page_name}")
+    print()
 
     return page_path, page_name
+
+
+def find_mimetype(header_content_type: str) -> str:
+    res = re.search(r"([^/;]+/[^/;]+)", header_content_type)
+    if res:
+        return res.group(1).strip()
+    else:
+        logging.error(f"Haven't find mimetype for Content-Type {header_content_type}")
+        return None
 
 
 def download_page(url, destination_path):
@@ -147,8 +177,8 @@ def download_page(url, destination_path):
         logging.error(f"Error code {r.status_code} while getting page {url}")
         return None
     
-    content_type = r.headers["Content-Type"]
-    extension = mimetypes.guess_extension(r.headers["Content-Type"])
+    content_type = find_mimetype(r.headers["Content-Type"])
+    extension = mimetypes.guess_extension(content_type)
 
     if extension:
         destination_path = os.path.splitext(destination_path)[0] + extension
@@ -210,25 +240,29 @@ def execute(url,
         # Backing up original page
         if l.type == LinkType.PAGE:
             shutil.copyfile(downloaded_file, downloaded_file + ".orig")
-        
+    
+    # Run post-process operations
+    #TODO: A TESTER
+    for link in page.links:
+        post_process_page_by_extension["html"](page, link)
 
-    # Remap page links & resources to local equivalents
-    origin_local_page_path, origin_local_page_name = parse_url(url)
-    origin_local_url = "".join(origin_local_page_path) + "/" + origin_local_page_name
+    # # Remap page links & resources to local equivalents
+    # origin_local_page_path, origin_local_page_name = parse_url(url)
+    # origin_local_url = "".join(origin_local_page_path) + "/" + origin_local_page_name
 
-    for l in page.links:
-        parsed_local_url = l.local_url.split("/")
+    # for l in page.links:
+    #     parsed_local_url = l.local_url.split("/")
 
-        if origin_local_page_path[0] != parsed_local_url[0]:
-            relative_local_url = "../" * len(origin_local_page_path) + l.local_url
+    #     if origin_local_page_path[0] != parsed_local_url[0]:
+    #         relative_local_url = "../" * len(origin_local_page_path) + l.local_url
 
-        else:
-            for f in origin_local_page_path:
-                if parsed_local_url[0] == f:
-                    parsed_local_url = parsed_local_url[1:]
-                else:
-                    break
+    #     else:
+    #         for f in origin_local_page_path:
+    #             if parsed_local_url[0] == f:
+    #                 parsed_local_url = parsed_local_url[1:]
+    #             else:
+    #                 break
 
-            relative_local_url = "/".join(parsed_local_url)
-        
-        remap_page(origin_local_url, l.original_url, relative_local_url)
+    #         relative_local_url = "/".join(parsed_local_url)
+    #     
+    #     remap_page(origin_local_url, l.original_url, relative_local_url)
