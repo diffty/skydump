@@ -25,7 +25,7 @@ REG_URL_NO_PROTOCOL = re.compile(r"^([a-zA-Z]+://)?([^\/]*)(\/[^?]*)?(\?.*)?", r
 #(.+)
 
 
-def parse_page(url,
+def parse_page(page: Page,
                allow_crawl_conditions: List[re.Pattern] = list(),
                forbid_crawl_conditions: List[re.Pattern] = list()):
     """
@@ -37,12 +37,7 @@ def parse_page(url,
     forbid_crawl_conditions: list of regexes that must NOT match to allow the link to be entered
     """
     
-    domain_reg = REG_URL_NO_PROTOCOL.search(url)
-    if not domain_reg:
-        raise Exception(f"Can't parse url: {url}")
-
-    curr_page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
-
+    url = page.remote_url
     logging.info(f"Requesting page {url}")
 
     response = requests.get(url)
@@ -54,6 +49,8 @@ def parse_page(url,
 
         def _predicate(t: Tag):
             return any(map(t.has_attr, link_attr_list))
+        
+        discovered_link_urls = []
 
         url_list: List[Tag] = soup.find_all(_predicate)
         for u in url_list:
@@ -62,6 +59,8 @@ def parse_page(url,
 
             if u.name == "a":
                 link_str = u.get("href")
+
+                discovered_link_urls.append(link_str)
 
                 logging.info(f"Found link {link_str}")
 
@@ -73,13 +72,13 @@ def parse_page(url,
                 new_link.original_url = link_str
 
                 new_link.resource.remote_url = link_str
-                new_link.resource.protocol=url_reg.group(1)
-                new_link.resource.domain=url_reg.group(2)
+                new_link.resource.protocol = url_reg.group(1)
+                new_link.resource.domain = url_reg.group(2)
 
                 if link_str.startswith("/"):
-                    new_link.resource.remote_url = curr_page.protocol + curr_page.domain + link_str
-                    new_link.resource.protocol = curr_page.protocol
-                    new_link.resource.domain = curr_page.domain
+                    new_link.resource.remote_url = page.protocol + page.domain + link_str
+                    new_link.resource.protocol = page.protocol
+                    new_link.resource.domain = page.domain
                 
                 elif all(map(lambda r: r.search(link_str) is not None, allow_crawl_conditions)) and all(map(lambda r: r.search(link_str) is None, forbid_crawl_conditions)):
                     new_link.resource.remote_url = link_str
@@ -93,6 +92,11 @@ def parse_page(url,
                     link_str = u.get(attr)
                     
                     if link_str and REG_RESOURCE.match(link_str) and not link_str.startswith("//"):
+                        discovered_link_urls.append(link_str)
+
+                        new_link.resource = Resource()
+                        new_link.original_url = link_str
+
                         if link_str.startswith("/"):
                             link_str = url + link_str
                         
@@ -102,22 +106,19 @@ def parse_page(url,
                         if not url_reg:
                             raise Exception(f"Can't parse resource url: {link_str}")
 
-                        new_link.resource = Resource()
-                        new_link.original_url = link_str
-
                         new_link.resource.remote_url = link_str
                         new_link.resource.protocol=url_reg.group(1)
                         new_link.resource.domain=url_reg.group(2)
 
-            if new_link.resource and new_link.resource.remote_url:
-                curr_page.links.append(new_link)
+            if new_link.resource \
+                and new_link.resource.remote_url:
+                
+                page.links.append(new_link)
     
-        return curr_page
-    
-    return None
+    return page
 
 
-def parse_url(url, force_extension=None):
+def parse_url(url, add_extension=None):
     """
     Parse any url and return a list with the base path to the resource (without protocol)
     then the name of the resource.
@@ -145,9 +146,6 @@ def parse_url(url, force_extension=None):
         no_protocol_url = res.group(3).lstrip("/")
         splitted_path = res.group(3).strip("/").split("/")
 
-        #print(f"{no_protocol_url=}")
-        #print(f"{splitted_path=}")
-
         if "/" not in no_protocol_url:
             page_name = no_protocol_url if no_protocol_url != "" else "index.html"
             page_path = []
@@ -164,15 +162,10 @@ def parse_url(url, force_extension=None):
             page_name = page_name + escaped_parameters[0]
 
         # TODO: somehow vérifier le ContentType avant de faire ça
-        if force_extension is not None:
-            page_name += force_extension
+        if add_extension is not None:
+            page_name += add_extension
     
     page_path = [res.group(2)] + page_path
-
-    #print(f"{page_path=}, {page_name=}")
-    #print(f"{res.group(2)}/{'/'.join(page_path)}/{page_name}")
-    #print()
-
     return page_path, page_name
 
 
@@ -198,19 +191,22 @@ def download(url, destination_path, overwrite=True):
     content_type = find_mimetype(r.headers["Content-Type"])
     extension = mimetypes.guess_extension(content_type)
 
-    if extension:
-        destination_path = os.path.splitext(destination_path)[0] + extension
+    if extension and os.path.splitext(destination_path)[1].lower() != extension:
+        destination_path = destination_path + extension
     
     if overwrite is False and os.path.exists(destination_path):
         logging.info(f"Resource {destination_path} already exist. Skipping download!")
     else:
         with open(destination_path, "wb") as fp:
             if r.apparent_encoding:
-                fp.write(rsc_content.decode(r.apparent_encoding).encode("utf-8"))
+                fp.write(rsc_content.decode(r.apparent_encoding).encode(r.apparent_encoding))
             else:
                 fp.write(rsc_content)
     
     return destination_path, content_type
+
+
+import html
 
 
 def remap_html_page(origin_local_url, original_url, local_url, relative=True):
@@ -221,17 +217,17 @@ def remap_html_page(origin_local_url, original_url, local_url, relative=True):
 
     local_file_content = None
     with open(origin_local_url, "rb") as fp:
-        local_file_content = fp.read().decode("utf-8")
+        local_file_content = fp.read().decode("ISO-8859-1")
 
     with open(origin_local_url, "wb") as fp:
-        fp.write(local_file_content.replace(f'"{original_url}"', local_url).encode("utf-8"))
+        fp.write(local_file_content.replace(f'"{html.escape(original_url)}"', f'"{html.escape(local_url)}"').encode("ISO-8859-1"))
 
 
-page_post_processors = [
-    lambda p, l: remap_html_page(p.local_url, l.resource.remote_url, l.resource.local_url, relative=True)
+PAGE_POST_PROCESSORS = [
+    lambda p, l: remap_html_page(p.local_url, l.original_url, l.resource.local_url, relative=True)
 ]
 
-asset_post_processors = {
+ASSET_POST_PROCESSORS = {
     "text/css": [
         
     ]
@@ -253,77 +249,92 @@ def retrieve_resource(remote_url, destination_path, overwrite=True):
     return downloaded_file, content_type
 
 
+def open_resource_manifest(path: str):
+    if os.path.exists(path):
+        logging.info(f"Found resource manifest in {path}")
+
+        with open(path, "r") as fp:
+            rsc_json = json.load(fp)
+            if rsc_json.get("type", None) == "page":
+                return Page.load(rsc_json)
+            else:
+                return Resource.load(rsc_json)
+
+
 def write_resource_manifest(rsc: Resource, path: str = None):
     if path is None:
-        path = os.path.splitext(rsc.local_url)[0] + ".json"
+        path = os.path.dirname(rsc.local_url) + "/" + os.path.basename(get_resource_local_url(rsc.remote_url)) + ".json"
     
     logging.info(f"Writing resource {rsc.remote_url} manifest in {path}")
+
+    if not os.path.exists(os.path.dirname(path)):
+        os.makedirs(os.path.dirname(path))
 
     with open(path, "w") as fp:
         fp.write(json.dumps(asdict(rsc), indent=4))
 
 
-# TODO: POUR REGLER PROBLMEE DE DEVOIR DL LE FICHIER POUR AVOIR SON MIME
-# ON LE DL LA PREMIERE FOIS ET ON CREE UN JSON A COTE AVEC LE NOM DU TRUC BASIQUE + JSON QUI MAPPE
-# LE vRAI FICHIER AVEC L'URL DE BASE ETC
-def execute(url,
-            allow_crawl_conditions: List[re.Pattern] = list(),
-            forbid_crawl_conditions: List[re.Pattern] = list()):
-
-    # Retrieve page and its allowed linked pages & resources
-    page = parse_page(url, allow_crawl_conditions, forbid_crawl_conditions)
+def crawl_page(url,
+               allow_crawl_conditions: List[re.Pattern] = list(),
+               forbid_crawl_conditions: List[re.Pattern] = list()):
     
-    page.local_url = get_resource_local_url(page.remote_url)
-    downloaded_file, content_type = retrieve_resource(page.remote_url, page.local_url)
-    page.content_type = content_type
+    page_local_url = get_resource_local_url(url)
+    page = open_resource_manifest(page_local_url + ".json")
+
+    if page is None:
+        domain_reg = REG_URL_NO_PROTOCOL.search(url)
+        if not domain_reg:
+            raise Exception(f"Can't parse url: {url}")
+
+        page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
+
+        # Retrieve page and its allowed linked pages & resources
+        page = parse_page(page, allow_crawl_conditions, forbid_crawl_conditions)
+        page.local_url = get_resource_local_url(page.remote_url)
+
+        # Write first manifest with first infos we do have rn
+        write_resource_manifest(page)
+
+        # Actually download the page then update the manifest with the real local filepath & info
+        downloaded_file, content_type = retrieve_resource(page.remote_url, page.local_url)
+        page.content_type = content_type
+        page.local_url = downloaded_file
+
+        write_resource_manifest(page)
+
+        # Backing up original page
+        shutil.copyfile(downloaded_file, downloaded_file + ".orig")
+
+    for l in page.links:
+        local_url = get_resource_local_url(l.resource.remote_url)
+        rsc = open_resource_manifest(local_url + ".json")
+
+        if rsc:
+            l.resource = rsc
+        else:
+            l.resource.local_url = local_url
+
+            downloaded_file, content_type = retrieve_resource(l.resource.remote_url,
+                                                              local_url,
+                                                              overwrite=False)
+            
+            # Updating the local_url field with the real local url of thed ownloaded file
+            # (to integrate corrected extension detected from the mimetype)
+            l.resource.local_url = downloaded_file
+            l.resource.content_type = content_type
+
+            write_resource_manifest(l.resource)
 
     write_resource_manifest(page)
 
-    # Backing up original page
-    shutil.copyfile(downloaded_file, downloaded_file + ".orig")
-
-    for l in page.links:
-        destination_path = get_resource_local_url(l.resource.remote_url)
-        l.resource.local_url = destination_path
-
-        downloaded_file, content_type = retrieve_resource(l.resource.remote_url,
-                                                          destination_path,
-                                                          overwrite=False)
-        
-        # Updating the local_url field with the real local url of thed ownloaded file
-        # (to integrate corrected extension detected from the mimetype)
-        l.resource.local_url = downloaded_file
-        l.resource.content_type = content_type
-
-        write_resource_manifest(l.resource)
-
     # Run post-process operations
     for link in page.links:
-        for fn in page_post_processors:
+        for fn in PAGE_POST_PROCESSORS:
             fn(page, link)
 
     for link in page.links:
-        fn_list = asset_post_processors.get(link.resource.content_type, [])
+        fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
         for fn in fn_list:
             fn(page, link)
-
-    # # Remap page links & resources to local equivalents
-    # origin_local_page_path, origin_local_page_name = parse_url(url)
-    # origin_local_url = "".join(origin_local_page_path) + "/" + origin_local_page_name
-
-    # for l in page.links:
-    #     parsed_local_url = l.local_url.split("/")
-
-    #     if origin_local_page_path[0] != parsed_local_url[0]:
-    #         relative_local_url = "../" * len(origin_local_page_path) + l.local_url
-
-    #     else:
-    #         for f in origin_local_page_path:
-    #             if parsed_local_url[0] == f:
-    #                 parsed_local_url = parsed_local_url[1:]
-    #             else:
-    #                 break
-
-    #         relative_local_url = "/".join(parsed_local_url)
-    #     
-    #     remap_page(origin_local_url, l.original_url, relative_local_url)
+    
+    return page
