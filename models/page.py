@@ -1,11 +1,9 @@
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, field
 from typing import List
 from .link import Link
+from .resource import Resource
 
 
 @dataclass
-class Page:
-    domain: str = field(default="")
-    remote_url: str = field(default="")
-    local_url: str = field(default="")
+class Page(Resource):
     links: List[Link] = field(default_factory=list)
