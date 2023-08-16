@@ -3,9 +3,9 @@ import logging
 
 from dataclasses import asdict
 
-from skydump import parse_page, find_mimetype
-from skydump import parse_url, crawl_page, open_resource_manifest, get_resource_local_url
-from skydump import download
+from skydump import parse_page, parse_css, find_mimetype
+from skydump import parse_url, crawl_page, crawl_css, open_resource_manifest
+from skydump import download, get_resource_local_url, remap_html_page
 
 
 logging.getLogger().setLevel(logging.WARNING)
@@ -27,7 +27,7 @@ ALLOW_CRAWL_CONDITIONS = [
 ]
 
 FORBID_CRAWL_CONDITIONS = [
-    re.compile(r"(?:" + "|".join(BLACKLIST_SUBDOMAINS) + r")\.skyrock\.com", re.I),
+    re.compile(r"(?:(?:" + "|".join(BLACKLIST_SUBDOMAINS) + r")\.skyrock\.com|sk.mu)", re.I),
 ]
 
 #page = parse_page(START_URL, ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
@@ -68,21 +68,46 @@ FORBID_CRAWL_CONDITIONS = [
 
 #download("https://pips.skyrock.com/", "test.html")
 
+REG_URL_NO_PROTOCOL = re.compile(r"^([a-zA-Z]+://)?([^\/]*)(\/[^?]*)?(\?.*)?", re.I)
 
 START_URL = "https://xxzevent2020xx.skyrock.com/"
 
-already_crawled = []
+already_crawled = set()
 to_crawl = [START_URL]
 
+
 while len(to_crawl) > 0:
-    print(f"---- GETTING PAGE {to_crawl[0]} ----")
-    page = crawl_page(to_crawl[0], ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
-    already_crawled.append(page.remote_url)
-    to_crawl = to_crawl[1:]
+    url = to_crawl.pop(0)
+
+    url_reg = REG_URL_NO_PROTOCOL.search(url)
+    if not url_reg:
+        raise Exception(f"Can't parse resource url: {url}")
+    
+    curr_domain = url_reg.group(1) + url_reg.group(2)
+
+    to_crawl = sorted(to_crawl, key=lambda u: u.startswith(curr_domain), reverse=True)
+
+    with open("to_crawl.txt", "w") as fp:
+        fp.write("\n".join(to_crawl))
+
+    print(f"---- GETTING PAGE {url} ----")
+    page = crawl_page(url, ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
+    already_crawled.add(url)
 
     for l in page.links:
-        if l.resource.domain == "xxzevent2020xx.skyrock.com" \
-            and l.resource.remote_url not in already_crawled \
-            and l.resource.type == "page":
+        if l.resource.remote_url not in already_crawled \
+            and l.resource.remote_url not in to_crawl \
+            and l.resource.type == "page" \
+            and "connect=1" not in l.resource.remote_url:
 
             to_crawl.append(l.resource.remote_url)
+
+#css_rsc = crawl_css("https://static.skyrock.net/css/blogs/120.css?eSaHpY_93")
+#css_rsc = crawl_css("https://static.skyrock.net/css/blogs/tpl.css?eFC2Ei1R6")
+#css_rsc = crawl_css("https://static.skyrock.net/css/blogs/421.css?e2Ikr0XNQ")
+#css_rsc = crawl_css("https://static.skyrock.net/css/m/common.css?e3Cyph8r0")
+#css_rsc = crawl_css("https://static.skyrock.net/css/front.css_eEHy_Q-LU.css")
+
+#remap_html_page("static.skyrock.net/css/common.css_er9WKMvqR.css",
+#                "/img/loader/wait-horizontal.gif",
+#                "../../static.skyrock.net/img/loader/wait-horizontal.gif")

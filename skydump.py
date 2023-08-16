@@ -8,6 +8,7 @@ import json
 import html
 from dataclasses import dataclass, asdict, replace
 from typing import List, Set
+from urllib.parse import urljoin 
 
 from bs4 import BeautifulSoup, PageElement, Tag
 
@@ -52,6 +53,8 @@ def parse_page(page: Page,
             return any(map(t.has_attr, link_attr_list))
         
         discovered_link_urls = []
+
+        page.links = []
 
         url_list: List[Tag] = soup.find_all(_predicate)
         for u in url_list:
@@ -108,8 +111,8 @@ def parse_page(page: Page,
                             raise Exception(f"Can't parse resource url: {link_str}")
 
                         new_link.resource.remote_url = link_str
-                        new_link.resource.protocol=url_reg.group(1)
-                        new_link.resource.domain=url_reg.group(2)
+                        new_link.resource.protocol = url_reg.group(1)
+                        new_link.resource.domain = url_reg.group(2)
 
             if new_link.resource \
                 and new_link.resource.remote_url:
@@ -117,6 +120,50 @@ def parse_page(page: Page,
                 page.links.append(new_link)
     
     return page
+
+
+def parse_css(css_rsc: Resource):
+    css_rsc.links = []
+
+    url = css_rsc.remote_url
+
+    response = requests.get(url)
+
+    css_url_reg = REG_URL_NO_PROTOCOL.search(url)
+    if not css_url_reg:
+        raise Exception(f"Can't parse resource url: {url}")
+
+    protocol = css_url_reg.group(1)
+    domain = css_url_reg.group(2)
+
+    if response:
+        if response.headers["Content-Type"] != "text/css":
+            raise Exception(f"Resource at url {url} is not a css file")
+    
+        for match in re.compile(r'url\(["\']?([^\)"\']*)["\']?\)').finditer(response.text):
+            link_str = match.group(1)
+
+            new_link = Link()
+            new_link.origin = url
+            
+            new_link.resource = Resource()
+            new_link.original_url = link_str
+
+            link_str = urljoin(url, link_str)
+
+            logging.info(f"Found resource {link_str}")
+
+            url_reg = REG_URL_NO_PROTOCOL.search(link_str)
+            if not url_reg:
+                raise Exception(f"Can't parse resource url: {link_str}")
+
+            new_link.resource.remote_url = link_str
+            new_link.resource.protocol = url_reg.group(1)
+            new_link.resource.domain = url_reg.group(2)
+
+            css_rsc.links.append(new_link)
+    
+    return css_rsc
 
 
 def parse_url(url, add_extension=None):
@@ -226,13 +273,32 @@ def remap_html_page(origin_local_url, original_url, local_url, relative=True):
         fp.write(local_file_content.replace(f'"{html.escape(original_url)}"', f'"{html.escape(local_url)}"').encode("ISO-8859-1"))
 
 
+def remap_css_page(origin_local_url, original_url, local_url, relative=True):
+    if relative:
+        local_url = (len(origin_local_url.split("/"))-1) * "../" + local_url
+
+    logging.info(f"Remapping file {origin_local_url} by replacing {original_url} with {local_url}")
+
+    local_file_content = None
+    with open(origin_local_url, "r") as fp:
+        local_file_content = fp.read()
+
+    with open(origin_local_url, "w") as fp:
+        new_str, n_sub = re.subn(f'url\(["\']?{re.escape(original_url)}["\']?\)', f'url("{local_url}")', local_file_content)
+        fp.write(new_str)
+
+
 PAGE_POST_PROCESSORS = [
     lambda p, l: remap_html_page(p.local_url, l.original_url, l.resource.local_url, relative=True)
 ]
 
+CSS_POST_PROCESSORS = [
+    lambda p, l: remap_css_page(p.local_url, l.original_url, l.resource.local_url, relative=True)
+]
+
 ASSET_POST_PROCESSORS = {
     "text/css": [
-        
+        lambda p, l: crawl_css(l.resource.remote_url)
     ]
 }
 
@@ -323,8 +389,8 @@ def crawl_page(url,
             l.resource.local_url = local_url
 
             downloaded_file_path, content_type, encoding, return_code = retrieve_resource(l.resource.remote_url,
-                                                                        local_url,
-                                                                        overwrite=False)
+                                                                                          local_url,
+                                                                                          overwrite=False)
             
             # Updating the local_url field with the real local url of thed ownloaded file
             # (to integrate corrected extension detected from the mimetype)
@@ -364,4 +430,84 @@ def crawl_page(url,
     return page
 
 
-#TODO: retirer les links dans le manifest parce que sinon ça fait des json impbriqués de l'enfer
+def crawl_css(url):
+    page_local_url = get_resource_local_url(url)
+    css_rsc = open_resource_manifest(page_local_url + ".json")
+
+    if css_rsc is None:
+        domain_reg = REG_URL_NO_PROTOCOL.search(url)
+        if not domain_reg:
+            raise Exception(f"Can't parse url: {url}")
+
+        css_rsc = Resource(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
+
+    if not css_rsc.complete:
+        # Retrieve page and its allowed linked pages & resources
+        css_rsc = parse_css(css_rsc)
+        css_rsc.local_url = get_resource_local_url(css_rsc.remote_url)
+
+        # Write first manifest with first infos we do have rn
+        write_resource_manifest(css_rsc)
+
+        # Actually download the page then update the manifest with the real local filepath & info
+        downloaded_file_path, content_type, encoding, return_code = retrieve_resource(css_rsc.remote_url, css_rsc.local_url)
+        css_rsc.content_type = content_type
+        css_rsc.local_url = downloaded_file_path
+        css_rsc.content_encoding = encoding
+        css_rsc.return_code = return_code
+
+        write_resource_manifest(css_rsc)
+
+        # Backing up original page
+        backup_path = downloaded_file_path + ".orig"
+        if not os.path.exists(backup_path) and os.path.exists(downloaded_file_path):
+            shutil.copyfile(downloaded_file_path, backup_path)
+
+    for l in css_rsc.links:
+        local_url = get_resource_local_url(l.resource.remote_url)
+        rsc = open_resource_manifest(local_url + ".json")
+
+        if rsc and os.path.exists(rsc.local_url):
+            l.resource = rsc
+        else:
+            l.resource.local_url = local_url
+
+            downloaded_file_path, content_type, encoding, return_code = retrieve_resource(l.resource.remote_url,
+                                                                                          local_url,
+                                                                                          overwrite=False)
+            
+            # Updating the local_url field with the real local url of thed ownloaded file
+            # (to integrate corrected extension detected from the mimetype)
+            l.resource.local_url = downloaded_file_path
+            l.resource.content_type = content_type
+            l.resource.content_encoding = encoding
+            l.resource.return_code = return_code
+
+            # If we just downloaded an html page (badly detected because it was not in a <a> link),
+            # We upgrade it as a Page
+            if content_type == "text/html":
+                l.resource = Page(**asdict(l.resource))
+                l.resource.type = "page"
+
+            write_resource_manifest(l.resource)
+
+    if not css_rsc.complete:
+        for link in css_rsc.links:
+            for fn in CSS_POST_PROCESSORS:
+                fn(css_rsc, link)
+
+        #for link in css_rsc.links:
+        #    fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
+        #    for fn in fn_list:
+        #        fn(css_rsc, link)
+
+        css_rsc.complete = True
+
+        # Hardcode strip of linked pages links to avoid filling manifests with nested pages
+        for l in css_rsc.links:
+            if isinstance(l.resource, Page):
+                l.resource.links = []
+
+        write_resource_manifest(css_rsc)
+
+    return css_rsc
