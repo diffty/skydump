@@ -5,7 +5,8 @@ import logging
 import shutil
 import mimetypes
 import json
-from dataclasses import dataclass, asdict
+import html
+from dataclasses import dataclass, asdict, replace
 from typing import List, Set
 
 from bs4 import BeautifulSoup, PageElement, Tag
@@ -186,9 +187,10 @@ def download(url, destination_path, overwrite=True):
 
     if r.status_code != 200:
         logging.error(f"Error code {r.status_code} while getting resource {url}.")
-        return None
+        return destination_path, None, None, r.status_code
     
     content_type = find_mimetype(r.headers["Content-Type"])
+    content_encoding = r.apparent_encoding
     extension = mimetypes.guess_extension(content_type)
 
     if extension and os.path.splitext(destination_path)[1].lower() != extension:
@@ -198,15 +200,16 @@ def download(url, destination_path, overwrite=True):
         logging.info(f"Resource {destination_path} already exist. Skipping download!")
     else:
         with open(destination_path, "wb") as fp:
-            if r.apparent_encoding:
-                fp.write(rsc_content.decode(r.apparent_encoding).encode(r.apparent_encoding))
+            if content_encoding:
+                try:
+                    fp.write(rsc_content.decode(content_encoding).encode(content_encoding))
+                except UnicodeDecodeError as err:
+                    fp.write(rsc_content)
+                    content_encoding = None
             else:
                 fp.write(rsc_content)
     
-    return destination_path, content_type
-
-
-import html
+    return destination_path, content_type, content_encoding, r.status_code
 
 
 def remap_html_page(origin_local_url, original_url, local_url, relative=True):
@@ -245,8 +248,8 @@ def retrieve_resource(remote_url, destination_path, overwrite=True):
     if destination_dir != "" and not os.path.exists(destination_dir):
         os.makedirs(destination_dir)
 
-    downloaded_file, content_type = download(remote_url, destination_path, overwrite)
-    return downloaded_file, content_type
+    downloaded_file_path, content_type, encoding, return_code = download(remote_url, destination_path, overwrite)
+    return downloaded_file_path, content_type, encoding, return_code
 
 
 def open_resource_manifest(path: str):
@@ -288,6 +291,7 @@ def crawl_page(url,
 
         page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
 
+    if not page.complete:
         # Retrieve page and its allowed linked pages & resources
         page = parse_page(page, allow_crawl_conditions, forbid_crawl_conditions)
         page.local_url = get_resource_local_url(page.remote_url)
@@ -296,45 +300,68 @@ def crawl_page(url,
         write_resource_manifest(page)
 
         # Actually download the page then update the manifest with the real local filepath & info
-        downloaded_file, content_type = retrieve_resource(page.remote_url, page.local_url)
+        downloaded_file_path, content_type, encoding, return_code = retrieve_resource(page.remote_url, page.local_url)
         page.content_type = content_type
-        page.local_url = downloaded_file
+        page.local_url = downloaded_file_path
+        page.content_encoding = encoding
+        page.return_code = return_code
 
         write_resource_manifest(page)
 
         # Backing up original page
-        shutil.copyfile(downloaded_file, downloaded_file + ".orig")
+        backup_path = downloaded_file_path + ".orig"
+        if not os.path.exists(backup_path) and os.path.exists(downloaded_file_path):
+            shutil.copyfile(downloaded_file_path, backup_path)
 
     for l in page.links:
         local_url = get_resource_local_url(l.resource.remote_url)
         rsc = open_resource_manifest(local_url + ".json")
 
-        if rsc:
+        if rsc and os.path.exists(rsc.local_url):
             l.resource = rsc
         else:
             l.resource.local_url = local_url
 
-            downloaded_file, content_type = retrieve_resource(l.resource.remote_url,
-                                                              local_url,
-                                                              overwrite=False)
+            downloaded_file_path, content_type, encoding, return_code = retrieve_resource(l.resource.remote_url,
+                                                                        local_url,
+                                                                        overwrite=False)
             
             # Updating the local_url field with the real local url of thed ownloaded file
             # (to integrate corrected extension detected from the mimetype)
-            l.resource.local_url = downloaded_file
+            l.resource.local_url = downloaded_file_path
             l.resource.content_type = content_type
+            l.resource.content_encoding = encoding
+            l.resource.return_code = return_code
+
+            # If we just downloaded an html page (badly detected because it was not in a <a> link),
+            # We upgrade it as a Page
+            if content_type == "text/html":
+                l.resource = Page(**asdict(l.resource))
+                l.resource.type = "page"
 
             write_resource_manifest(l.resource)
 
-    write_resource_manifest(page)
-
     # Run post-process operations
-    for link in page.links:
-        for fn in PAGE_POST_PROCESSORS:
-            fn(page, link)
+    if not page.complete:
+        for link in page.links:
+            for fn in PAGE_POST_PROCESSORS:
+                fn(page, link)
 
-    for link in page.links:
-        fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
-        for fn in fn_list:
-            fn(page, link)
-    
+        for link in page.links:
+            fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
+            for fn in fn_list:
+                fn(page, link)
+
+        page.complete = True
+
+        # Hardcode strip of linked pages links to avoid filling manifests with nested pages
+        for l in page.links:
+            if isinstance(l.resource, Page):
+                l.resource.links = []
+
+        write_resource_manifest(page)
+
     return page
+
+
+#TODO: retirer les links dans le manifest parce que sinon ça fait des json impbriqués de l'enfer

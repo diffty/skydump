@@ -8,6 +8,7 @@ from .resource import Resource
 class Page(Resource):
     type: str = "page"
     links: List[Link] = field(default_factory=list)
+    complete: bool = False
 
     @staticmethod
     def load(data: dict):

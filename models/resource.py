@@ -9,6 +9,8 @@ class Resource:
     remote_url: str = field(default="")
     local_url: str = field(default="")
     content_type: str = ""
+    content_encoding: str = field(default_factory=str)
+    return_code: int = field(default=-1)
 
     @staticmethod
     def load(data: dict):

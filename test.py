@@ -8,7 +8,7 @@ from skydump import parse_url, crawl_page, open_resource_manifest, get_resource_
 from skydump import download
 
 
-logging.getLogger().setLevel(logging.INFO)
+logging.getLogger().setLevel(logging.WARNING)
 
 
 BLACKLIST_SUBDOMAINS = [
@@ -21,8 +21,6 @@ BLACKLIST_SUBDOMAINS = [
     "en",
 ]
 
-
-START_URL = "https://pips.skyrock.com"
 
 ALLOW_CRAWL_CONDITIONS = [
     re.compile(r"[a-zA-Z0-9\-]+\.skyrock\.com", re.I),
@@ -68,8 +66,23 @@ FORBID_CRAWL_CONDITIONS = [
 #print(get_resource_local_url("https://pips.skyrock.com"))
 #print(get_resource_local_url("/1.html"))
 
-
-page = crawl_page(START_URL, ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
-print(page)
-
 #download("https://pips.skyrock.com/", "test.html")
+
+
+START_URL = "https://xxzevent2020xx.skyrock.com/"
+
+already_crawled = []
+to_crawl = [START_URL]
+
+while len(to_crawl) > 0:
+    print(f"---- GETTING PAGE {to_crawl[0]} ----")
+    page = crawl_page(to_crawl[0], ALLOW_CRAWL_CONDITIONS, FORBID_CRAWL_CONDITIONS)
+    already_crawled.append(page.remote_url)
+    to_crawl = to_crawl[1:]
+
+    for l in page.links:
+        if l.resource.domain == "xxzevent2020xx.skyrock.com" \
+            and l.resource.remote_url not in already_crawled \
+            and l.resource.type == "page":
+
+            to_crawl.append(l.resource.remote_url)
