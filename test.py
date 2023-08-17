@@ -8,7 +8,7 @@ from skydump import parse_url, crawl_page, crawl_css, open_resource_manifest
 from skydump import download, get_resource_local_url, remap_html_page
 
 
-logging.getLogger().setLevel(logging.WARNING)
+logging.getLogger().setLevel(logging.INFO)
 
 
 BLACKLIST_SUBDOMAINS = [
@@ -76,16 +76,11 @@ already_crawled = set()
 to_crawl = [START_URL]
 
 
+#user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/116.0"
+
+
 while len(to_crawl) > 0:
     url = to_crawl.pop(0)
-
-    url_reg = REG_URL_NO_PROTOCOL.search(url)
-    if not url_reg:
-        raise Exception(f"Can't parse resource url: {url}")
-    
-    curr_domain = url_reg.group(1) + url_reg.group(2)
-
-    to_crawl = sorted(to_crawl, key=lambda u: u.startswith(curr_domain), reverse=True)
 
     with open("to_crawl.txt", "w") as fp:
         fp.write("\n".join(to_crawl))
@@ -98,9 +93,18 @@ while len(to_crawl) > 0:
         if l.resource.remote_url not in already_crawled \
             and l.resource.remote_url not in to_crawl \
             and l.resource.type == "page" \
-            and "connect=1" not in l.resource.remote_url:
+            and "connect=1" not in l.resource.remote_url \
+            and all(map(lambda r: r.search(l.resource.remote_url) is not None, ALLOW_CRAWL_CONDITIONS)) and all(map(lambda r: r.search(l.resource.remote_url) is None, FORBID_CRAWL_CONDITIONS)):
 
             to_crawl.append(l.resource.remote_url)
+    
+    url_reg = REG_URL_NO_PROTOCOL.search(url)
+    if not url_reg:
+        raise Exception(f"Can't parse resource url: {url}")
+    
+    curr_domain = url_reg.group(1) + url_reg.group(2)
+    to_crawl = sorted(to_crawl, key=lambda u: u.startswith(curr_domain), reverse=True)
+
 
 #css_rsc = crawl_css("https://static.skyrock.net/css/blogs/120.css?eSaHpY_93")
 #css_rsc = crawl_css("https://static.skyrock.net/css/blogs/tpl.css?eFC2Ei1R6")

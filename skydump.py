@@ -6,6 +6,7 @@ import shutil
 import mimetypes
 import json
 import html
+import time
 from dataclasses import dataclass, asdict, replace
 from typing import List, Set
 from urllib.parse import urljoin 
@@ -42,8 +43,12 @@ def parse_page(page: Page,
     url = page.remote_url
     logging.info(f"Requesting page {url}")
 
+    time.sleep(0.20)
+    
     response = requests.get(url)
     if response:
+        logging.info(f"Finished download of page {url}.")
+
         html_doc = response.text
 
         soup = BeautifulSoup(html_doc, 'html.parser')
@@ -127,6 +132,8 @@ def parse_css(css_rsc: Resource):
 
     url = css_rsc.remote_url
 
+    time.sleep(0.20)
+    
     response = requests.get(url)
 
     css_url_reg = REG_URL_NO_PROTOCOL.search(url)
@@ -229,6 +236,8 @@ def find_mimetype(header_content_type: str) -> str:
 def download(url, destination_path, overwrite=True):
     logging.info(f"Downloading {url} to {destination_path}")
 
+    time.sleep(0.20)
+
     r = requests.get(url)
     rsc_content = r.content
 
@@ -236,6 +245,8 @@ def download(url, destination_path, overwrite=True):
         logging.error(f"Error code {r.status_code} while getting resource {url}.")
         return destination_path, None, None, r.status_code
     
+    logging.info(f"Finished download of {url} to {destination_path}")
+
     content_type = find_mimetype(r.headers["Content-Type"])
     content_encoding = r.apparent_encoding
     extension = mimetypes.guess_extension(content_type)
