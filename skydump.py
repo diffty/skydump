@@ -387,7 +387,7 @@ def crawl_page(url,
 
         # Backing up original page
         backup_path = downloaded_file_path + ".orig"
-        if not os.path.exists(backup_path) and os.path.exists(downloaded_file_path):
+        if not os.path.exists(backup_path) and os.path.exists(downloaded_file_path) and os.path.isfile(downloaded_file_path):
             shutil.copyfile(downloaded_file_path, backup_path)
 
     for l in page.links:
