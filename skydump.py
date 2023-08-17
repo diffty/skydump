@@ -236,7 +236,7 @@ def find_mimetype(header_content_type: str) -> str:
 def download(url, destination_path, overwrite=True):
     logging.info(f"Downloading {url} to {destination_path}")
 
-    time.sleep(0.50)
+    time.sleep(0.20)
 
     r = requests.get(url)
     rsc_content = r.content
@@ -369,7 +369,7 @@ def crawl_page(url,
         page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
 
     if not page.complete:
-        time.sleep(3)
+        time.sleep(1)
 
         # Retrieve page and its allowed linked pages & resources
         page = parse_page(page, allow_crawl_conditions, forbid_crawl_conditions)
