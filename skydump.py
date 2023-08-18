@@ -43,7 +43,7 @@ def parse_page(page: Page,
     url = page.remote_url
     logging.info(f"Requesting page {url}")
 
-    time.sleep(1)
+    time.sleep(0.50)
     
     response = requests.get(url)
     if response:
@@ -132,7 +132,7 @@ def parse_css(css_rsc: Resource):
 
     url = css_rsc.remote_url
 
-    time.sleep(0.20)
+    time.sleep(0.05)
     
     response = requests.get(url)
 
@@ -236,7 +236,7 @@ def find_mimetype(header_content_type: str) -> str:
 def download(url, destination_path, overwrite=True):
     logging.info(f"Downloading {url} to {destination_path}")
 
-    time.sleep(0.20)
+    time.sleep(0.05)
 
     r = requests.get(url)
     rsc_content = r.content
@@ -369,7 +369,7 @@ def crawl_page(url,
         page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
 
     if not page.complete:
-        time.sleep(1)
+        time.sleep(0.50)
 
         # Retrieve page and its allowed linked pages & resources
         page = parse_page(page, allow_crawl_conditions, forbid_crawl_conditions)
