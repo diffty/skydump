@@ -43,7 +43,7 @@ def parse_page(page: Page,
     url = page.remote_url
     logging.info(f"Requesting page {url}")
 
-    time.sleep(0.50)
+    time.sleep(1)
     
     response = requests.get(url)
     if response:
@@ -132,7 +132,7 @@ def parse_css(css_rsc: Resource):
 
     url = css_rsc.remote_url
 
-    time.sleep(0.05)
+    time.sleep(0.2)
     
     response = requests.get(url)
 
@@ -236,7 +236,7 @@ def find_mimetype(header_content_type: str) -> str:
 def download(url, destination_path, overwrite=True):
     logging.info(f"Downloading {url} to {destination_path}")
 
-    time.sleep(0.05)
+    time.sleep(0.20)
 
     r = requests.get(url)
     rsc_content = r.content
@@ -270,41 +270,32 @@ def download(url, destination_path, overwrite=True):
     return destination_path, content_type, content_encoding, r.status_code
 
 
-def remap_html_page(origin_local_url, original_url, local_url, relative=True):
+def remap_html_page(page_content, origin_local_url, original_url, local_url, relative=True):
+    if relative:
+        local_url = (len(origin_local_url.split("/"))-1) * "../" + local_url
+    
+    logging.info(f"Remapping file {origin_local_url} by replacing {original_url} with {local_url}")
+
+    page_content = page_content.replace(f'"{html.escape(original_url)}"', f'"{html.escape(local_url)}"')
+    return page_content
+
+
+def remap_css_page(page_content, origin_local_url, original_url, local_url, relative=True):
     if relative:
         local_url = (len(origin_local_url.split("/"))-1) * "../" + local_url
 
     logging.info(f"Remapping file {origin_local_url} by replacing {original_url} with {local_url}")
 
-    local_file_content = None
-    with open(origin_local_url, "rb") as fp:
-        local_file_content = fp.read().decode("ISO-8859-1")
-
-    with open(origin_local_url, "wb") as fp:
-        fp.write(local_file_content.replace(f'"{html.escape(original_url)}"', f'"{html.escape(local_url)}"').encode("ISO-8859-1"))
-
-
-def remap_css_page(origin_local_url, original_url, local_url, relative=True):
-    if relative:
-        local_url = (len(origin_local_url.split("/"))-1) * "../" + local_url
-
-    logging.info(f"Remapping file {origin_local_url} by replacing {original_url} with {local_url}")
-
-    local_file_content = None
-    with open(origin_local_url, "r") as fp:
-        local_file_content = fp.read()
-
-    with open(origin_local_url, "w") as fp:
-        new_str, n_sub = re.subn(f'url\(["\']?{re.escape(original_url)}["\']?\)', f'url("{local_url}")', local_file_content)
-        fp.write(new_str)
+    page_content, n_sub = re.subn(f'url\(["\']?{re.escape(original_url)}["\']?\)', f'url("{local_url}")', page_content)
+    return page_content
 
 
 PAGE_POST_PROCESSORS = [
-    lambda p, l: remap_html_page(p.local_url, l.original_url, l.resource.local_url, relative=True)
+    lambda page_content, p, l: remap_html_page(page_content, p.local_url, l.original_url, l.resource.local_url, relative=True)
 ]
 
 CSS_POST_PROCESSORS = [
-    lambda p, l: remap_css_page(p.local_url, l.original_url, l.resource.local_url, relative=True)
+    lambda page_content, p, l: remap_css_page(page_content, p.local_url, l.original_url, l.resource.local_url, relative=True)
 ]
 
 ASSET_POST_PROCESSORS = {
@@ -369,8 +360,6 @@ def crawl_page(url,
         page = Page(remote_url=url, domain=domain_reg.group(2), protocol=domain_reg.group(1))
 
     if not page.complete:
-        time.sleep(0.50)
-
         # Retrieve page and its allowed linked pages & resources
         page = parse_page(page, allow_crawl_conditions, forbid_crawl_conditions)
         page.local_url = get_resource_local_url(page.remote_url)
@@ -422,16 +411,24 @@ def crawl_page(url,
 
     # Run post-process operations
     if not page.complete:
-        for link in page.links:
-            for fn in PAGE_POST_PROCESSORS:
-                fn(page, link)
+        if os.path.exists(page.local_url) and os.path.isfile(page.local_url):
+            local_file_content = None
+            with open(page.local_url, "rb") as fp:
+                local_file_content = fp.read().decode("ISO-8859-1")
+            
+            for link in page.links:
+                for fn in PAGE_POST_PROCESSORS:
+                    local_file_content = fn(local_file_content, page, link)
 
-        for link in page.links:
-            fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
-            for fn in fn_list:
-                fn(page, link)
+            with open(page.local_url, "wb") as fp:
+                fp.write(local_file_content.encode("ISO-8859-1"))
 
-        page.complete = True
+            for link in page.links:
+                fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
+                for fn in fn_list:
+                    fn(page, link)
+
+            page.complete = True
 
         # Hardcode strip of linked pages links to avoid filling manifests with nested pages
         for l in page.links:
@@ -505,10 +502,18 @@ def crawl_css(url):
             write_resource_manifest(l.resource)
 
     if not css_rsc.complete:
+        local_file_content = None
+
+        with open(css_rsc.local_url, "r") as fp:
+            local_file_content = fp.read()
+
         for link in css_rsc.links:
             for fn in CSS_POST_PROCESSORS:
-                fn(css_rsc, link)
+                local_file_content = fn(local_file_content, css_rsc, link)
 
+        with open(css_rsc.local_url, "w") as fp:
+            fp.write(local_file_content)
+        
         #for link in css_rsc.links:
         #    fn_list = ASSET_POST_PROCESSORS.get(link.resource.content_type, [])
         #    for fn in fn_list:
